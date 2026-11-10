@@ -246,8 +246,6 @@ func TestConsumeLowBitrateRedundancyFrameSkipsUncodedFrame(t *testing.T) {
 	decoder := NewDecoder()
 
 	err := decoder.consumeLowBitrateRedundancyFrame(
-		nil,
-		nil,
 		false,
 		false,
 		false,
@@ -262,11 +260,10 @@ func TestConsumeLowBitrateRedundancyFrameSkipsUncodedFrame(t *testing.T) {
 
 func TestConsumeLowBitrateRedundancyFrameDecodesMidFrame(t *testing.T) {
 	decoder := NewDecoder()
+	decoder.readOnly = true
 	decoder.rangeDecoder.Init(testSilkFrame())
 
 	err := decoder.consumeLowBitrateRedundancyFrame(
-		make([]float32, 320),
-		nil,
 		true,
 		false,
 		false,
@@ -277,6 +274,21 @@ func TestConsumeLowBitrateRedundancyFrameDecodesMidFrame(t *testing.T) {
 	)
 
 	assert.NoError(t, err)
+}
+
+func TestReadOnlyDecodeFrameStopsWhereFullDecodeDoes(t *testing.T) {
+	full := NewDecoder()
+	full.rangeDecoder.Init(testSilkFrame())
+	assert.NoError(t, full.decodeFrame(make([]float32, 320), true, nanoseconds20Ms, BandwidthWideband, true, false))
+
+	readOnly := NewDecoder()
+	readOnly.readOnly = true
+	readOnly.rangeDecoder.Init(testSilkFrame())
+	assert.NoError(t, readOnly.decodeFrame(nil, true, nanoseconds20Ms, BandwidthWideband, true, false))
+
+	assert.Equal(t, full.rangeDecoder, readOnly.rangeDecoder)
+	assert.True(t, readOnly.haveDecoded)
+	assert.Equal(t, full.isPreviousFrameVoiced, readOnly.isPreviousFrameVoiced)
 }
 
 func TestNormalizeLineSpectralFrequencyStageOne(t *testing.T) {
