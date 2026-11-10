@@ -109,3 +109,23 @@ func BenchmarkDecodeLBRR(b *testing.B) {
 		})
 	}
 }
+
+func TestDecodeLBRRWarmAllocations(t *testing.T) {
+	fixture := loadLBRRFixture(t)
+	for _, test := range fixture.Cases {
+		t.Run(test.name(), func(t *testing.T) {
+			decoder, err := NewDecoderWithOutput(test.Rate, test.Channels)
+			require.NoError(t, err)
+			packets := test.packets(t)
+			out := make([]int16, test.Steps[0].Samples*test.Channels)
+			decodeAll := func() {
+				for _, packet := range packets {
+					_, decodeErr := decoder.DecodeToInt16(packet, out)
+					require.NoError(t, decodeErr)
+				}
+			}
+			decodeAll()
+			require.Zero(t, testing.AllocsPerRun(10, decodeAll))
+		})
+	}
+}

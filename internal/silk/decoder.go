@@ -82,6 +82,8 @@ type Decoder struct {
 	fixedPLC              fixedPLCState
 	fixedCNG              fixedCNGState
 	fixedFirstFrame       bool
+	redundancyReader      *Decoder
+	readOnly              bool
 }
 
 // NewDecoder creates a new Silk Decoder.
@@ -1794,6 +1796,15 @@ func (d *Decoder) decodeFrame(
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.8.6
 	eQ23 := d.decodeExcitation(signalType, quantizationOffsetType, lcgSeed, pulsecounts, lsbcounts)
 
+	// Skipped LBRR frames stop here, as in silk_Decode. The conditional coding
+	// of the next frame only looks at these two fields.
+	if d.readOnly {
+		d.isPreviousFrameVoiced = signalType == frameSignalTypeVoiced
+		d.haveDecoded = true
+
+		return nil
+	}
+
 	// https://www.rfc-editor.org/rfc/rfc6716.html#section-4.2.7.9
 	d.silkFrameReconstructionFixed(
 		signalType, bandwidth,
@@ -2077,20 +2088,15 @@ func (d *Decoder) consumeLowBitrateRedundancy(
 		return nil
 	}
 
-	discard := NewDecoder()
-	discard.rangeDecoder = d.rangeDecoder
-	frameSampleCount := discard.samplesInSubframe(bandwidth) * subframeCount(silkFrameNanoseconds)
-	midScratch := make([]float32, frameSampleCount)
-	sideScratch := make([]float32, frameSampleCount)
+	reader := d.lowBitrateRedundancyReader()
+	reader.rangeDecoder = d.rangeDecoder
 
 	previousMidCoded := false
 	previousSideCoded := false
 	for i := range midFlags {
 		midCoded := midFlags[i]
 		sideCoded := isStereo && sideFlags[i]
-		if err := discard.consumeLowBitrateRedundancyFrame(
-			midScratch,
-			sideScratch,
+		if err := reader.consumeLowBitrateRedundancyFrame(
 			midCoded,
 			sideCoded,
 			isStereo,
@@ -2105,16 +2111,28 @@ func (d *Decoder) consumeLowBitrateRedundancy(
 		previousSideCoded = sideCoded
 	}
 
-	d.rangeDecoder = discard.rangeDecoder
+	d.rangeDecoder = reader.rangeDecoder
 
 	return nil
 }
 
+// lowBitrateRedundancyReader needs no reset between packets: the first LBRR
+// frame of a packet is always coded independently (RFC 6716 Sections 4.2.7.4
+// and 4.2.7.6.1).
+func (d *Decoder) lowBitrateRedundancyReader() *Decoder {
+	if d.redundancyReader == nil {
+		reader := NewDecoder()
+		reader.readOnly = true
+		reader.sideDecoder.readOnly = true
+		d.redundancyReader = &reader
+	}
+
+	return d.redundancyReader
+}
+
 // consumeLowBitrateRedundancyFrame advances one redundant SILK frame through a
-// throwaway decoder so the regular payload keeps the correct entropy position.
+// read-only decoder so the regular payload keeps the correct entropy position.
 func (d *Decoder) consumeLowBitrateRedundancyFrame(
-	midScratch []float32,
-	sideScratch []float32,
 	midCoded bool,
 	sideCoded bool,
 	isStereo bool,
@@ -2131,7 +2149,7 @@ func (d *Decoder) consumeLowBitrateRedundancyFrame(
 	}
 	if midCoded {
 		if err := d.decodeFrame(
-			midScratch,
+			nil,
 			true,
 			silkFrameNanoseconds,
 			bandwidth,
@@ -2147,7 +2165,7 @@ func (d *Decoder) consumeLowBitrateRedundancyFrame(
 
 	d.sideDecoder.rangeDecoder = d.rangeDecoder
 	if err := d.sideDecoder.decodeFrame(
-		sideScratch,
+		nil,
 		true,
 		silkFrameNanoseconds,
 		bandwidth,
